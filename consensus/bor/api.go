@@ -46,6 +46,15 @@ func (api *API) GetSnapshot(number *rpc.BlockNumber) (*Snapshot, error) {
 	return api.bor.snapshot(api.chain, header.Number.Uint64(), header.Hash(), nil)
 }
 
+// GetSnapshot retrieves the state snapshot at a given block.
+func (api *API) GetSnapshotProposer(number *rpc.BlockNumber) (common.Address, error) {
+	snap, err := api.GetSnapshot(number)
+	if err != nil {
+		return common.Address{}, err
+	}
+	return snap.ValidatorSet.GetProposer().Address, nil
+}
+
 // GetAuthor retrieves the author a block.
 func (api *API) GetAuthor(number *rpc.BlockNumber) (*common.Address, error) {
 	// Retrieve the requested block number (or current if none requested)
