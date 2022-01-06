@@ -53,6 +53,11 @@ var (
 )
 
 const (
+	// reporting interval
+	reportInterval = 2
+)
+
+const (
 	// minRequestSize is the minimum number of bytes to request from a remote peer.
 	// This number is used as the low cap for account and storage range requests.
 	// Bytecode and trienode are limited inherently by item count (1).
@@ -61,7 +66,7 @@ const (
 	// maxRequestSize is the maximum number of bytes to request from a remote peer.
 	// This number is used as the high cap for account and storage range requests.
 	// Bytecode and trienode are limited more explicitly by the caps below.
-	maxRequestSize = 512 * 1024
+	maxRequestSize = 512 * 1024 * 8
 
 	// maxCodeRequestCount is the maximum number of bytecode blobs to request in a
 	// single query. If this number is too low, we're not filling responses fully
@@ -325,10 +330,10 @@ type healTask struct {
 	codeTasks map[common.Hash]struct{}      // Set of byte code tasks currently queued for retrieval
 }
 
-// syncProgress is a database entry to allow suspending and resuming a snapshot state
+// SyncProgress is a database entry to allow suspending and resuming a snapshot state
 // sync. Opposed to full and fast sync, there is no way to restart a suspended
 // snap sync without prior knowledge of the suspension point.
-type syncProgress struct {
+type SyncProgress struct {
 	Tasks []*accountTask // The suspended account tasks (contract tasks within)
 
 	// Status report during syncing phase
@@ -342,12 +347,15 @@ type syncProgress struct {
 	// Status report during healing phase
 	TrienodeHealSynced uint64             // Number of state trie nodes downloaded
 	TrienodeHealBytes  common.StorageSize // Number of state trie bytes persisted to disk
-	TrienodeHealDups   uint64             // Number of state trie nodes already processed
-	TrienodeHealNops   uint64             // Number of state trie nodes not requested
 	BytecodeHealSynced uint64             // Number of bytecodes downloaded
 	BytecodeHealBytes  common.StorageSize // Number of bytecodes persisted to disk
-	BytecodeHealDups   uint64             // Number of bytecodes already processed
-	BytecodeHealNops   uint64             // Number of bytecodes not requested
+}
+
+// SyncPending is analogous to SyncProgress, but it's used to report on pending
+// ephemeral sync progress that doesn't get persisted into the database.
+type SyncPending struct {
+	TrienodeHeal uint64 // Number of state trie nodes pending
+	BytecodeHeal uint64 // Number of bytecodes pending
 }
 
 // SyncPeer abstracts out the methods required for a peer to be synced against
@@ -556,7 +564,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	// Retrieve the previous sync status from LevelDB and abort if already synced
 	s.loadSyncStatus()
 	if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
-		log.Debug("Snapshot sync already completed")
+		log.Info("Snapshot sync already completed")
 		return nil
 	}
 	defer func() { // Persist any progress, independent of failure
@@ -567,7 +575,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.saveSyncStatus()
 	}()
 
-	log.Debug("Starting snapshot sync cycle", "root", root)
+	log.Info("Starting snapshot sync cycle", "root", root)
 
 	// Flush out the last committed raw states
 	defer func() {
@@ -580,7 +588,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 
 	// Whether sync completed or not, disregard any future packets
 	defer func() {
-		log.Debug("Terminating snapshot sync cycle", "root", root)
+		log.Info("Terminating snapshot sync cycle", "root", root)
 		s.lock.Lock()
 		s.accountReqs = make(map[uint64]*accountRequest)
 		s.storageReqs = make(map[uint64]*storageRequest)
@@ -671,7 +679,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 // loadSyncStatus retrieves a previously aborted sync status from the database,
 // or generates a fresh one if none is available.
 func (s *Syncer) loadSyncStatus() {
-	var progress syncProgress
+	var progress SyncProgress
 
 	if status := rawdb.ReadSnapshotSyncStatus(s.db); status != nil {
 		if err := json.Unmarshal(status, &progress); err != nil {
@@ -775,7 +783,7 @@ func (s *Syncer) saveSyncStatus() {
 		}
 	}
 	// Store the actual progress markers
-	progress := &syncProgress{
+	progress := &SyncProgress{
 		Tasks:              s.tasks,
 		AccountSynced:      s.accountSynced,
 		AccountBytes:       s.accountBytes,
@@ -793,6 +801,31 @@ func (s *Syncer) saveSyncStatus() {
 		panic(err) // This can only fail during implementation
 	}
 	rawdb.WriteSnapshotSyncStatus(s.db, status)
+}
+
+// Progress returns the snap sync status statistics.
+func (s *Syncer) Progress() (*SyncProgress, *SyncPending) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	progress := &SyncProgress{
+		AccountSynced:      s.accountSynced,
+		AccountBytes:       s.accountBytes,
+		BytecodeSynced:     s.bytecodeSynced,
+		BytecodeBytes:      s.bytecodeBytes,
+		StorageSynced:      s.storageSynced,
+		StorageBytes:       s.storageBytes,
+		TrienodeHealSynced: s.trienodeHealSynced,
+		TrienodeHealBytes:  s.trienodeHealBytes,
+		BytecodeHealSynced: s.bytecodeHealSynced,
+		BytecodeHealBytes:  s.bytecodeHealBytes,
+	}
+	pending := new(SyncPending)
+	if s.healer != nil {
+		pending.TrienodeHeal = uint64(len(s.healer.trieTasks))
+		pending.BytecodeHeal = uint64(len(s.healer.codeTasks))
+	}
+	return progress, pending
 }
 
 // cleanAccountTasks removes account range retrieval tasks that have already been
@@ -1312,7 +1345,7 @@ func (s *Syncer) assignTrienodeHealTasks(success chan *trienodeHealResponse, fai
 			paths:   paths,
 			task:    s.healer,
 		}
-		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
+		req.timeout = time.AfterFunc(30*time.Second, func() {
 			peer.Log().Debug("Trienode heal request timed out", "reqid", reqid)
 			s.rates.Update(idle, TrieNodesMsg, 0, 0)
 			s.scheduleRevertTrienodeHealRequest(req)
@@ -1428,7 +1461,7 @@ func (s *Syncer) assignBytecodeHealTasks(success chan *bytecodeHealResponse, fai
 			hashes:  hashes,
 			task:    s.healer,
 		}
-		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
+		req.timeout = time.AfterFunc(30*time.Second, func() {
 			peer.Log().Debug("Bytecode heal request timed out", "reqid", reqid)
 			s.rates.Update(idle, ByteCodesMsg, 0, 0)
 			s.scheduleRevertBytecodeHealRequest(req)
@@ -2083,7 +2116,7 @@ func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
 	if err := batch.Write(); err != nil {
 		log.Crit("Failed to persist healing data", "err", err)
 	}
-	log.Debug("Persisted set of healing data", "type", "trienodes", "bytes", common.StorageSize(batch.ValueSize()))
+	log.Info("Persisted set of healing data", "type", "trienodes", "bytes", common.StorageSize(batch.ValueSize()))
 }
 
 // processBytecodeHealResponse integrates an already validated bytecode response
@@ -2119,7 +2152,7 @@ func (s *Syncer) processBytecodeHealResponse(res *bytecodeHealResponse) {
 	if err := batch.Write(); err != nil {
 		log.Crit("Failed to persist healing data", "err", err)
 	}
-	log.Debug("Persisted set of healing data", "type", "bytecode", "bytes", common.StorageSize(batch.ValueSize()))
+	log.Info("Persisted set of healing data", "type", "bytecode", "bytes", common.StorageSize(batch.ValueSize()))
 }
 
 // forwardAccountTask takes a filled account task and persists anything available
@@ -2777,7 +2810,7 @@ func (s *Syncer) report(force bool) {
 // reportSyncProgress calculates various status reports and provides it to the user.
 func (s *Syncer) reportSyncProgress(force bool) {
 	// Don't report all the events, just occasionally
-	if !force && time.Since(s.logTime) < 8*time.Second {
+	if !force && time.Since(s.logTime) < reportInterval*time.Second {
 		return
 	}
 	// Don't report anything until we have a meaningful progress
@@ -2808,15 +2841,17 @@ func (s *Syncer) reportSyncProgress(force bool) {
 		accounts = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.accountSynced), s.accountBytes.TerminalString())
 		storage  = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.storageSynced), s.storageBytes.TerminalString())
 		bytecode = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.bytecodeSynced), s.bytecodeBytes.TerminalString())
+		peers    = fmt.Sprintf("%v", len(s.peers))
+		tasks    = fmt.Sprintf("%v", len(s.tasks))
 	)
 	log.Info("State sync in progress", "synced", progress, "state", synced,
-		"accounts", accounts, "slots", storage, "codes", bytecode, "eta", common.PrettyDuration(estTime-elapsed))
+		"accounts", accounts, "slots", storage, "codes", bytecode, "eta", common.PrettyDuration(estTime-elapsed), "peers", peers, "tasks", tasks)
 }
 
 // reportHealProgress calculates various status reports and provides it to the user.
 func (s *Syncer) reportHealProgress(force bool) {
 	// Don't report all the events, just occasionally
-	if !force && time.Since(s.logTime) < 8*time.Second {
+	if !force && time.Since(s.logTime) < reportInterval*time.Second {
 		return
 	}
 	s.logTime = time.Now()
@@ -2827,9 +2862,10 @@ func (s *Syncer) reportHealProgress(force bool) {
 		bytecode = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.bytecodeHealSynced), s.bytecodeHealBytes.TerminalString())
 		accounts = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.accountHealed), s.accountHealedBytes.TerminalString())
 		storage  = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.storageHealed), s.storageHealedBytes.TerminalString())
+		peers    = fmt.Sprintf("%v", len(s.peers))
 	)
 	log.Info("State heal in progress", "accounts", accounts, "slots", storage,
-		"codes", bytecode, "nodes", trienode, "pending", s.healer.scheduler.Pending())
+		"codes", bytecode, "nodes", trienode, "pending", s.healer.scheduler.Pending(), "peers", peers)
 }
 
 // estimateRemainingSlots tries to determine roughly how many slots are left in

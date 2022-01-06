@@ -261,12 +261,24 @@ func (d *Downloader) Progress() ethereum.SyncProgress {
 	default:
 		log.Error("Unknown downloader chain/mode combo", "light", d.lightchain != nil, "full", d.blockchain != nil, "mode", mode)
 	}
+	progress, pending := d.SnapSyncer.Progress()
+
 	return ethereum.SyncProgress{
-		StartingBlock: d.syncStatsChainOrigin,
-		CurrentBlock:  current,
-		HighestBlock:  d.syncStatsChainHeight,
-		PulledStates:  d.syncStatsState.processed,
-		KnownStates:   d.syncStatsState.processed + d.syncStatsState.pending,
+		StartingBlock:       d.syncStatsChainOrigin,
+		CurrentBlock:        current,
+		HighestBlock:        d.syncStatsChainHeight,
+		SyncedAccounts:      progress.AccountSynced,
+		SyncedAccountBytes:  uint64(progress.AccountBytes),
+		SyncedBytecodes:     progress.BytecodeSynced,
+		SyncedBytecodeBytes: uint64(progress.BytecodeBytes),
+		SyncedStorage:       progress.StorageSynced,
+		SyncedStorageBytes:  uint64(progress.StorageBytes),
+		HealedTrienodes:     progress.TrienodeHealSynced,
+		HealedTrienodeBytes: uint64(progress.TrienodeHealBytes),
+		HealedBytecodes:     progress.BytecodeHealSynced,
+		HealedBytecodeBytes: uint64(progress.BytecodeHealBytes),
+		HealingTrienodes:    pending.TrienodeHeal,
+		HealingBytecode:     pending.BytecodeHeal,
 	}
 }
 
