@@ -63,12 +63,6 @@ them using your favourite package manager. Once the dependencies are installed, 
      $ make bor
      ```
 
-- or, to build the full suite of utilities:
-
-     ```shell
-     $ make bor-all
-     ```
-
 ### Make awesome changes!
 
 1. Create new branch for your changes
