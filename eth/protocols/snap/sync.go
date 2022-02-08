@@ -66,7 +66,7 @@ const (
 	// maxRequestSize is the maximum number of bytes to request from a remote peer.
 	// This number is used as the high cap for account and storage range requests.
 	// Bytecode and trienode are limited more explicitly by the caps below.
-	maxRequestSize = 512 * 1024 * 8
+	maxRequestSize = 512 * 1024 * 4
 
 	// maxCodeRequestCount is the maximum number of bytecode blobs to request in a
 	// single query. If this number is too low, we're not filling responses fully
@@ -626,6 +626,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.cleanStorageTasks()
 		s.cleanAccountTasks()
 		if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
+			log.Info("Snap sync completed")
 			return nil
 		}
 		// Assign all the data retrieval tasks to any free peers
