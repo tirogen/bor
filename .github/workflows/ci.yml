@@ -23,7 +23,7 @@ jobs:
         - uses: actions/checkout@v3
         - run: |
             git submodule update --init --recursive --force
-            git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+            git fetch --no-tags --prune --depth=1 origin +refs/heads/develop:refs/remotes/origin/develop
 
         - uses: actions/setup-go@v3
           with:
@@ -50,7 +50,7 @@ jobs:
           run: make all
 
         # TODO: make it work
-        
+
         # - name: Reproducible build test
         #   run: |
         #     make geth
@@ -73,7 +73,7 @@ jobs:
 
         - name: test-integration
           run: make test-integration
-        
+
         - name: Upload coverage to Codecov
           uses: codecov/codecov-action@v1
           with:

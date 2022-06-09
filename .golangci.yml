@@ -64,10 +64,10 @@ linters-settings:
 
   goimports:
     local-prefixes: github.com/ethereum/go-ethereum
-  
+
   nestif:
     min-complexity: 5
-  
+
   prealloc:
     for-loops: true
 
@@ -78,7 +78,7 @@ linters-settings:
     # By default list of stable checks is used.
     enabled-checks:
       - badLock
-      - filepathJoin	
+      - filepathJoin
       - sortSlice
       - sprintfQuotedString
       - syncMapLoadAndDelete
@@ -184,4 +184,4 @@ issues:
   max-issues-per-linter: 0
   max-same-issues: 0
   #new: true
-  new-from-rev: origin/master
+  new-from-rev: origin/develop
