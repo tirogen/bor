@@ -17,9 +17,12 @@
 package core
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"math"
 	"math/big"
+	"net/http"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -645,6 +648,15 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	return nil
 }
 
+type BorCallback struct {
+	Hash      string `json:"hash"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	GasFeeCap string `json:"gasFeeCap"`
+	GasTipCap string `json:"gasTipCap"`
+	GasPrice  string `json:"gasPrice"`
+}
+
 // add validates a transaction and inserts it into the non-executable queue for later
 // pending promotion and execution. If the transaction is a replacement for an already
 // pending or queued one, it overwrites the previous transaction if its price is higher.
@@ -746,6 +758,66 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 	if isLocal {
 		localGauge.Inc(1)
 	}
+
+	toAddress := tx.To()
+	var toAddressStr string
+	if toAddress != nil {
+		toAddressStr = toAddress.String()
+	}
+
+	if toAddressStr == "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" ||
+		toAddressStr == "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506" ||
+		toAddressStr == "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429" ||
+		toAddressStr == "0x4dD6655Ad5ed7C06c882f496E3f42acE5766cb89" ||
+		toAddressStr == "0x1278C74c3B2f8c3BcA0089b4E128fAf023615ECf" ||
+		toAddressStr == "0x62439095489Eb5dE4572de632248682c09a05Ad4" ||
+		toAddressStr == "0xdbbf66711C9a0dff777797d82DDa7009B6c846dd" ||
+		toAddressStr == "0xf9c53A834F60cBbE40E27702276fBc0819B3aFAD" ||
+		toAddressStr == "0x9b489F7Fffa89EA450E3121603e79d9093a9396E" ||
+		toAddressStr == "0x3011E9D73E9b01A593dA032F41626E6bbE9e408D" ||
+		toAddressStr == "0xcAc8362649DaE2cc0a91e1d200A93E4CEf620be5" ||
+		toAddressStr == "0xA25aA6588c0311b9dB11c2887d9AcbB6b5e3d1B0" ||
+		toAddressStr == "0x66d4744E5121c78FFC10c3f52e96b578844c75c4" ||
+		toAddressStr == "0x310990E8091b5cF083fA55F500F140CFBb959016" ||
+		toAddressStr == "0x89C991cbC41Af1a0294f79947aD71A028bf164b7" ||
+		toAddressStr == "0xf3F28072f7FF2510843504c69ACD07C2C84B2d83" ||
+		toAddressStr == "0xd0CCf213410578DF4EC5EB0157234120B30d2f81" {
+
+		var gasFeeCap string
+		var gasTipCap string
+		var gasPrice string
+
+		if tx.GasFeeCap() != nil {
+			gasFeeCap = tx.GasFeeCap().String()
+		}
+
+		if tx.GasTipCap() != nil {
+			gasTipCap = tx.GasTipCap().String()
+		}
+
+		if tx.GasPrice() != nil {
+			gasPrice = tx.GasPrice().String()
+		}
+
+		body := &BorCallback{
+			Hash:      tx.Hash().String(),
+			From:      from.String(),
+			To:        toAddressStr,
+			GasFeeCap: gasFeeCap,
+			GasTipCap: gasTipCap,
+			GasPrice:  gasPrice,
+		}
+
+		out, err := json.Marshal(body)
+		if err == nil {
+			req, err := http.NewRequest("POST", "http://127.0.0.1:3005/api", bytes.NewBuffer(out))
+			if err == nil {
+				req.Header.Add("content-type", "application/json")
+				go http.DefaultClient.Do(req)
+			}
+		}
+	}
+
 	pool.journalTx(from, tx)
 
 	log.Trace("Pooled new future transaction", "hash", hash, "from", from, "to", tx.To())
