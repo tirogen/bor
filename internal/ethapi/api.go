@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"time"
 
@@ -185,6 +186,93 @@ func (s *PublicTxPoolAPI) Content() map[string]map[string]map[string]*RPCTransac
 		content["queued"][account.Hex()] = dump
 	}
 	return content
+}
+
+type GasMinMax struct {
+	MinGasPrice *hexutil.Big `json:"minGasPrice"`
+	MaxGasPrice *hexutil.Big `json:"maxGasPrice"`
+}
+
+type tempGasMinMax struct {
+	minGasPrice *big.Int
+	maxGasPrice *big.Int
+}
+
+func (s *PublicTxPoolAPI) ContentPendingTo(contracts []string) map[string]*GasMinMax {
+	content := make(map[string]*GasMinMax)
+	temp := make(map[string]*tempGasMinMax)
+
+	pending, err := s.b.GetPoolTransactions()
+	if err != nil {
+		return content
+	}
+
+	var to *common.Address
+	var toStr string
+	var gasPrice *big.Int
+	for _, tx := range pending {
+		to = tx.To()
+		if to == nil {
+			continue
+		}
+		toStr = to.Hex()
+		gasPrice = tx.GasPrice()
+		if _, exists := content[toStr]; !exists {
+			temp[toStr] = &tempGasMinMax{
+				minGasPrice: gasPrice,
+				maxGasPrice: gasPrice,
+			}
+			continue
+		}
+		if gasPrice.Cmp(temp[toStr].minGasPrice) < 0 {
+			temp[toStr].minGasPrice = gasPrice
+		}
+		if gasPrice.Cmp(temp[toStr].maxGasPrice) > 0 {
+			temp[toStr].maxGasPrice = gasPrice
+		}
+	}
+
+	for _, contract := range contracts {
+		if _, exists := temp[contract]; !exists {
+			continue
+		}
+		content[contract] = &GasMinMax{
+			MinGasPrice: (*hexutil.Big)(temp[contract].minGasPrice),
+			MaxGasPrice: (*hexutil.Big)(temp[contract].maxGasPrice),
+		}
+	}
+
+	return content
+}
+
+type GasPercentileMinMax struct {
+	MinGasPrice        *hexutil.Big `json:"minGasPrice"`
+	MaxGasPrice        *hexutil.Big `json:"maxGasPrice"`
+	PercentileGasPrice *hexutil.Big `json:"percentileGasPrice"`
+}
+
+func (s *PublicTxPoolAPI) ContentPendingGas(percentile int) *GasPercentileMinMax {
+	gasMinMax := &GasPercentileMinMax{}
+	pending, err := s.b.GetPoolTransactions()
+	if err != nil || len(pending) == 0 {
+		return gasMinMax
+	}
+
+	gasPrices := make([]*big.Int, 0, len(pending))
+	for _, tx := range pending {
+		gasPrice := tx.GasPrice()
+		gasPrices = append(gasPrices, gasPrice)
+	}
+
+	sort.Slice(gasPrices, func(i, j int) bool {
+		return gasPrices[i].Cmp(gasPrices[j]) < 0
+	})
+
+	gasMinMax.MinGasPrice = (*hexutil.Big)(gasPrices[0])
+	gasMinMax.MaxGasPrice = (*hexutil.Big)(gasPrices[len(gasPrices)-1])
+	index := (len(gasPrices) - 1) * percentile / 100
+	gasMinMax.PercentileGasPrice = (*hexutil.Big)(gasPrices[index])
+	return gasMinMax
 }
 
 // ContentFrom returns the transactions contained within the transaction pool.
