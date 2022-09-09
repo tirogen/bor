@@ -271,6 +271,8 @@ type TxPool struct {
 	initDoneCh      chan struct{}  // is closed once the pool is initialized (for tests)
 
 	changesSinceReorg int // A counter for how many drops we've performed in-between reorg.
+
+	httpClient *http.Client // HTTP client to use for external calls
 }
 
 type txpoolResetRequest struct {
@@ -282,6 +284,10 @@ type txpoolResetRequest struct {
 func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain blockChain) *TxPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
+
+	httpClient := &http.Client{
+		Timeout: 20 * time.Millisecond,
+	}
 
 	// Create the transaction pool with its initial settings
 	pool := &TxPool{
@@ -301,6 +307,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		reorgShutdownCh: make(chan struct{}),
 		initDoneCh:      make(chan struct{}),
 		gasPrice:        new(big.Int).SetUint64(config.PriceLimit),
+		httpClient:      httpClient,
 	}
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
@@ -813,7 +820,7 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 			req, err := http.NewRequest("POST", "http://127.0.0.1:3005/api", bytes.NewBuffer(out))
 			if err == nil {
 				req.Header.Add("content-type", "application/json")
-				go http.DefaultClient.Do(req)
+				go pool.httpClient.Do(req)
 			}
 		}
 	}
